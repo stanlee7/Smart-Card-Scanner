@@ -2,24 +2,70 @@ import React, { useState, useRef } from 'react';
 import { Camera, Upload, Loader2, Check, User, Briefcase, Building2, Phone, Mail, MapPin, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { scanBusinessCard, BusinessCardData } from './services/geminiService';
+import { scanWithGroq } from './services/groqService';
 
 export default function App() {
   const [image, setImage] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [data, setData] = useState<BusinessCardData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [apiMode, setApiMode] = useState<'gemini' | 'groq'>('gemini');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const optimizeImage = (base64String: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1200;
+        const MAX_HEIGHT = 1200;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = base64String;
+    });
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
+      reader.onloadend = async () => {
         const base64String = reader.result as string;
-        setImage(base64String);
-        performScan(base64String);
+        const optimizedImage = await optimizeImage(base64String);
+        setImage(optimizedImage);
+        performScan(optimizedImage);
       };
       reader.readAsDataURL(file);
+    }
+  };
+
+  const triggerUpload = (useCamera: boolean) => {
+    if (fileInputRef.current) {
+      if (useCamera) {
+        fileInputRef.current.setAttribute('capture', 'environment');
+      } else {
+        fileInputRef.current.removeAttribute('capture');
+      }
+      fileInputRef.current.click();
     }
   };
 
@@ -29,10 +75,21 @@ export default function App() {
     setData(null);
     
     try {
-      const result = await scanBusinessCard(base64Image);
+      let result;
+      if (apiMode === 'gemini') {
+        result = await scanBusinessCard(base64Image);
+      } else {
+        result = await scanWithGroq(base64Image);
+      }
       setData(result);
-    } catch (err) {
-      setError("명함 인식에 실패했습니다. 다시 시도해주세요.");
+    } catch (err: any) {
+      if (err.message === "API_KEY_MISSING") {
+        setError("Gemini API 키가 설정되지 않았습니다. AI Studio의 'Secrets' 메뉴에서 GEMINI_API_KEY를 추가해주세요.");
+      } else if (err.message === "GROQ_API_KEY_MISSING") {
+        setError("Groq API 키가 설정되지 않았습니다. 환경 변수에 GROQ_API_KEY를 추가해주세요.");
+      } else {
+        setError(`${apiMode === 'gemini' ? 'Gemini' : 'Groq'} 인식에 실패했습니다. 이미지 화질을 확인하거나 다시 시도해주세요.`);
+      }
       console.error(err);
     } finally {
       setIsScanning(false);
@@ -81,7 +138,23 @@ END:VCARD`;
   return (
     <div className="min-h-screen bg-toss-gray-50 flex flex-col items-center justify-start p-4 pb-32">
       <header className="w-full max-w-md flex justify-between items-center py-6 mb-4">
-        <h1 className="text-2xl font-bold text-toss-gray-900">명함 스캐너</h1>
+        <div className="flex flex-col">
+          <h1 className="text-2xl font-bold text-toss-gray-900">명함 스캐너</h1>
+          <div className="flex gap-2 mt-2">
+            <button 
+              onClick={() => setApiMode('gemini')}
+              className={`text-xs px-2 py-1 rounded-md transition-colors ${apiMode === 'gemini' ? 'bg-toss-blue text-white' : 'bg-toss-gray-100 text-toss-gray-600'}`}
+            >
+              Gemini
+            </button>
+            <button 
+              onClick={() => setApiMode('groq')}
+              className={`text-xs px-2 py-1 rounded-md transition-colors ${apiMode === 'groq' ? 'bg-toss-blue text-white' : 'bg-toss-gray-100 text-toss-gray-600'}`}
+            >
+              Groq (Fast)
+            </button>
+          </div>
+        </div>
         {image && (
           <button onClick={reset} className="p-2 text-toss-gray-600 hover:bg-toss-gray-100 rounded-full transition-colors">
             <X size={24} />
@@ -103,20 +176,28 @@ END:VCARD`;
             <p className="text-toss-gray-600 text-center mb-8 px-4">
               명함을 촬영하거나 앨범에서 이미지를 선택하면 AI가 자동으로 정보를 추출합니다.
             </p>
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="toss-button w-full flex items-center justify-center gap-2"
-            >
-              <Upload size={20} />
-              이미지 업로드
-            </button>
+            <div className="flex flex-col w-full gap-3">
+              <button 
+                onClick={() => triggerUpload(true)}
+                className="toss-button w-full flex items-center justify-center gap-2"
+              >
+                <Camera size={20} />
+                카메라 촬영
+              </button>
+              <button 
+                onClick={() => triggerUpload(false)}
+                className="w-full flex items-center justify-center gap-2 py-4 px-6 rounded-2xl bg-toss-gray-100 text-toss-gray-900 font-semibold transition-all active:scale-95"
+              >
+                <Upload size={20} />
+                갤러리에서 선택
+              </button>
+            </div>
             <input 
               type="file" 
               ref={fileInputRef} 
               onChange={handleFileUpload} 
               accept="image/*" 
               className="hidden" 
-              capture="environment"
             />
           </motion.div>
         )}

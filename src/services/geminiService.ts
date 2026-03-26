@@ -1,6 +1,13 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+// API 키가 없을 경우를 대비한 체크 로직
+const getApiKey = () => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === "MY_GEMINI_API_KEY" || key === "") {
+    return null;
+  }
+  return key;
+};
 
 export interface BusinessCardData {
   name: string;
@@ -13,8 +20,19 @@ export interface BusinessCardData {
 }
 
 export async function scanBusinessCard(base64Image: string): Promise<BusinessCardData> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("API_KEY_MISSING");
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
   const model = "gemini-3-flash-preview";
   
+  // MimeType 추출 (data:image/png;base64,... 에서 image/png 추출)
+  const mimeTypeMatch = base64Image.match(/data:([^;]+);base64/);
+  const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : "image/jpeg";
+  const base64Data = base64Image.split(",")[1] || base64Image;
+
   const systemInstruction = `당신은 OCR 및 데이터 구조화 전문 AI입니다. 이미지를 분석하여 다음 원칙에 따라 순수한 JSON 객체만 반환하십시오. 
 (1) 왜곡 없이 정확히 추출. 
 (2) 없는 정보는 빈 문자열("") 처리. 
@@ -45,8 +63,8 @@ export async function scanBusinessCard(base64Image: string): Promise<BusinessCar
             { text: "이 명함 이미지에서 정보를 추출해줘." },
             {
               inlineData: {
-                mimeType: "image/jpeg",
-                data: base64Image.split(",")[1] || base64Image,
+                mimeType: mimeType,
+                data: base64Data,
               },
             },
           ],
