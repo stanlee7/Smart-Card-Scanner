@@ -1,0 +1,5 @@
+{
+  "name": "Smart Card Scanner",
+  "description": "AI-powered business card scanner that extracts contact information with high precision.",
+  "requestFramePermissions": ["camera"]
+}
